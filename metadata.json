@@ -1,0 +1,5 @@
+{
+  "name": "Data Browser",
+  "description": "A secure data browser application mimicking Streamlit functionality with authentication, schema management, and data editing capabilities.",
+  "requestFramePermissions": []
+}
