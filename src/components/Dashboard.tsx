@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User } from '../types';
-import { db } from '../services/mockDb';
-import { DataBrowser } from './DataBrowser';
-import { Database, Table, User as UserIcon, LogOut, ChevronRight, Menu } from 'lucide-react';
+import { db } from '../services/db';
+import { DataBrowser } from '../DataBrowser';
 
 interface DashboardProps {
     user: User;
