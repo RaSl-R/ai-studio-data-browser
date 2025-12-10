@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { db } from '../services/mockDb';
-import { QueryResult, TableInfo, User, PAGE_SIZE } from '../types';
-import { validateWhereClause } from '../utils';
+import { db } from '../src/services/mockDb';
+import { db } from '../src/services/db';
+import { QueryResult, TableInfo, User, PAGE_SIZE } from '../src/types';
+import { validateWhereClause } from '../src/utils';
 import { 
     ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, 
     Filter, RefreshCw, Save, Download, Upload, AlertTriangle, FileUp 
