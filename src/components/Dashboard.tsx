@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User } from '../types';
 import { db } from '../services/db';
-import { DataBrowser } from '../DataBrowser';
+import { DataBrowser } from '../components/DataBrowser';
 
 interface DashboardProps {
     user: User;
