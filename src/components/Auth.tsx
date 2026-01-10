@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../services/mockDb';
+import { db } from '../services/mockDb.ts';
 import { User, Group } from '../types';
 import { validateEmail, validatePassword, getPasswordStrength } from '../utils';
 import { Lock, Mail, UserPlus, KeyRound, AlertCircle, CheckCircle2 } from 'lucide-react';
