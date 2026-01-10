@@ -1,11 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { User } from '../types';
+import { User as AppUser } from '../types';
 import { db } from '../services/db';
-import { DataBrowser } from '../components/DataBrowser';
+import { DataBrowser } from './DataBrowser';
+
+import {
+  Menu,
+  Database,
+  User,
+  Table,
+  ChevronRight,
+  LogOut
+} from 'lucide-react';
 
 interface DashboardProps {
-    user: User;
-    onLogout: () => void;
+  user: AppUser;
+  onLogout: () => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
@@ -54,7 +63,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                     </h1>
                     <div className="mt-4 flex items-center gap-3 bg-slate-800 p-3 rounded-lg">
                         <div className="bg-slate-700 p-2 rounded-full">
-                            <UserIcon className="w-4 h-4 text-slate-300" />
+                            <User className="w-4 h-4 text-slate-300" />
                         </div>
                         <div className="overflow-hidden">
                             <p className="text-sm font-medium truncate">{user.email}</p>
