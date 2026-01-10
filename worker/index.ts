@@ -1,6 +1,6 @@
 // worker/index.ts - Cloudflare Worker s testovací úvodní stránkou
-import bcrypt from 'bcryptjs';
 import { neon } from '@neondatabase/serverless';
+import { argon2Verify } from 'hash-wasm';
 
 export interface Env {
   DATABASE_URL: string;
@@ -228,7 +228,6 @@ export default {
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
         const { email, password } = await request.json() as any;
 
-        // Vyhledání uživatele a jeho skupiny
         const users = await sql`
           SELECT u.id, u.email, u.password_hash, g.name as group_name 
           FROM auth.users u
@@ -243,20 +242,35 @@ export default {
         }
 
         const user = users[0];
-        const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+        const storedHash = user.password_hash; 
 
-        if (!isPasswordValid) {
-          return new Response(JSON.stringify({ error: 'Nesprávné heslo' }), { status: 401, headers });
-        }
+        try {
+          // argon2Verify automaticky rozpozná parametry (m, t, p) z vašeho řetězce
+          const isValid = await argon2Verify({
+            password: password,
+            hash: storedHash,
+          });
 
-        // Vrátíme data uživatele (bez hesla!)
-        return new Response(JSON.stringify({
-          user: {
-            id: user.id,
-            email: user.email,
-            group_name: user.group_name || 'Users'
+          if (!isValid) {
+            return new Response(JSON.stringify({ error: 'Nesprávné heslo' }), { status: 401, headers });
           }
-        }), { headers });
+
+          // Úspěšné přihlášení
+          return new Response(JSON.stringify({
+            user: {
+              id: user.id,
+              email: user.email,
+              group_name: user.group_name || 'Users'
+            }
+          }), { headers });
+
+        } catch (e: any) {
+          console.error('Argon2 Error:', e);
+          return new Response(JSON.stringify({ 
+            error: 'Chyba při ověřování hesla',
+            details: e.message 
+          }), { status: 500, headers });
+        }
       }
 
       // POST /api/auth/register - Registrace
