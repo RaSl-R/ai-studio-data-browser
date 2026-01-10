@@ -1,4 +1,5 @@
 // worker/index.ts - Cloudflare Worker s testovací úvodní stránkou
+import bcrypt from 'bcryptjs';
 import { neon } from '@neondatabase/serverless';
 
 export interface Env {
@@ -242,10 +243,9 @@ export default {
         }
 
         const user = users[0];
+        const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
-        // POZOR: V produkci použijte bcrypt.compare()! 
-        // Pokud máte hesla v DB jako prostý text (nedoporučeno), porovnejte přímo:
-        if (user.password_hash !== password) {
+        if (!isPasswordValid) {
           return new Response(JSON.stringify({ error: 'Nesprávné heslo' }), { status: 401, headers });
         }
 
