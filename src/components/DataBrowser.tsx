@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { db } from '../services/db';
+import { db } from '../services/mockDb';
 import { QueryResult, TableInfo, User, PAGE_SIZE } from '../types';
 import { validateWhereClause } from '../utils';
 import {
