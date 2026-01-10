@@ -223,6 +223,68 @@ export default {
         }), { headers });
       }
 
+      // POST /api/auth/login - Přihlášení
+      if (url.pathname === '/api/auth/login' && request.method === 'POST') {
+        const { email, password } = await request.json() as any;
+
+        // Vyhledání uživatele a jeho skupiny
+        const users = await sql`
+          SELECT u.id, u.email, u.password_hash, g.name as group_name 
+          FROM auth.users u
+          LEFT JOIN auth.user_groups ug ON u.id = ug.user_id
+          LEFT JOIN auth.groups g ON ug.group_id = g.id
+          WHERE u.email = ${email} AND u.is_active = true
+          LIMIT 1
+        `;
+
+        if (users.length === 0) {
+          return new Response(JSON.stringify({ error: 'Uživatel nenalezen' }), { status: 401, headers });
+        }
+
+        const user = users[0];
+
+        // POZOR: V produkci použijte bcrypt.compare()! 
+        // Pokud máte hesla v DB jako prostý text (nedoporučeno), porovnejte přímo:
+        if (user.password_hash !== password) {
+          return new Response(JSON.stringify({ error: 'Nesprávné heslo' }), { status: 401, headers });
+        }
+
+        // Vrátíme data uživatele (bez hesla!)
+        return new Response(JSON.stringify({
+          user: {
+            id: user.id,
+            email: user.email,
+            group_name: user.group_name || 'Users'
+          }
+        }), { headers });
+      }
+
+      // POST /api/auth/register - Registrace
+      if (url.pathname === '/api/auth/register' && request.method === 'POST') {
+        const { email, groupId } = await request.json() as any;
+        
+        try {
+          // Vložit uživatele
+          const newUser = await sql`
+            INSERT INTO auth.users (email, is_active)
+            VALUES (${email}, true)
+            RETURNING id
+          `;
+          
+          // Pokud je zadána skupina, přiřadit
+          if (groupId) {
+            await sql`
+              INSERT INTO auth.user_groups (user_id, group_id)
+              VALUES (${newUser[0].id}, ${groupId})
+            `;
+          }
+          
+          return new Response(JSON.stringify({ success: true }), { headers });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 400, headers });
+        }
+      }
+
       // 404 - Neznámý endpoint
       return new Response(JSON.stringify({
         error: 'Not Found',
