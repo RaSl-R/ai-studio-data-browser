@@ -225,6 +225,18 @@ export default {
       }
 
       // POST /api/auth/login - Přihlášení
+      async function verifyPassword(password, hash) {
+        try {
+          return await argon2Verify({
+            password: password,
+            hash: hash,
+          });
+        } catch (e) {
+          console.error("WASM Argon2 Error:", e);
+          return false;
+        }
+      }
+
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
         const { email, password } = await request.json() as any;
 
