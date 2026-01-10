@@ -2,11 +2,18 @@ import { neon } from '@neondatabase/serverless';
 
 export default {
   async fetch(request, env, ctx) {
-    // 1. KLIČOVÝ KROK: Musíte použít env.DATABASE_URL uvnitř fetch
+    // Tento výpis nám v prohlížeči ukáže, jaké klíče v env vlastně jsou
+    const keys = Object.keys(env);
+    
     if (!env.DATABASE_URL) {
       return new Response(JSON.stringify({ 
-        error: "DATABASE_URL is missing in env object!" 
-      }), { status: 500 });
+        error: "DATABASE_URL chybí!",
+        nalezene_klice: keys, // Tady uvidíme, co tam Cloudflare skutečně posílá
+        vzkaz: "Pokud je pole nalezene_klice prázdné, wrangler.toml přebíjí dashboard."
+      }), { 
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
 
     const sql = neon(env.DATABASE_URL);
