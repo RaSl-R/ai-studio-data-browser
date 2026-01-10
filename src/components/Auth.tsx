@@ -8,7 +8,7 @@ interface AuthProps {
     onLogin: (user: User) => void;
 }
 
-export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
+const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     const [view, setView] = useState<'login' | 'register' | 'reset'>('login');
     
     return (
@@ -277,3 +277,5 @@ const ResetForm: React.FC<{ onViewChange: (v: any) => void }> = ({ onViewChange 
         </form>
     );
 };
+
+export default Auth;
