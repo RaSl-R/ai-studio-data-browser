@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User as AppUser } from '../types';
-import { db } from '../services/mockDb';
+import { db } from '../services/db';
 import { DataBrowser } from './DataBrowser';
 
 import {

@@ -1,7 +1,7 @@
 // src/services/db.ts
 import { QueryResult, TableInfo, User, PAGE_SIZE, Group } from "../types";
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8787';
+const API_URL = import.meta.env.VITE_API_URL;
 
 class DatabaseService {
   private async fetchAPI(endpoint: string, options?: RequestInit) {
