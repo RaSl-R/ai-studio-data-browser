@@ -1,6 +1,6 @@
 // worker/index.ts - Cloudflare Worker s testovací úvodní stránkou
 import { neon } from '@neondatabase/serverless';
-import { argon2Verify, createArgon2 } from 'hash-wasm';
+import { argon2Verify, argon2id } from 'hash-wasm';
 
 export interface Env {
   DATABASE_URL: string;
@@ -91,11 +91,10 @@ export default {
         const { password, email } = await request.json() as any;
 
         try {
-          // 1. Vygenerovat nový hash z hesla pomocí argon2id
-          const argon2 = await createArgon2();
+          // 1. Vygenerovat nový hash pomocí argon2id
           const salt = crypto.getRandomValues(new Uint8Array(16));
           
-          const newHash = argon2.hash({
+          const newHash = await argon2id({
             password: password,
             salt: salt,
             parallelism: 4,
@@ -105,7 +104,7 @@ export default {
             outputType: 'encoded'
           });
 
-          // 2. Načíst uživatele z databáze (pokud je zadán email)
+          // 2. Načíst uživatele z databáze
           let dbHash = null;
           let dbUser = null;
           if (email) {
@@ -122,7 +121,7 @@ export default {
             }
           }
 
-          // 3. Ověřit heslo proti DB hashi (pokud existuje)
+          // 3. Ověřit heslo proti DB hashi
           let verificationResult = null;
           let verificationError = null;
           
@@ -142,15 +141,14 @@ export default {
           let hashParams = null;
           if (dbHash) {
             const parts = dbHash.split('$');
-            // Format: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
             if (parts.length >= 5) {
               const params = parts[3].split(',');
               hashParams = {
-                algorithm: parts[1], // argon2id
-                version: parts[2],   // v=19
-                memory: params[0],   // m=65536
-                iterations: params[1], // t=3
-                parallelism: params[2], // p=4
+                algorithm: parts[1],
+                version: parts[2],
+                memory: params[0],
+                iterations: params[1],
+                parallelism: params[2],
                 salt_base64: parts[4],
                 hash_base64: parts[5]
               };
@@ -177,25 +175,19 @@ export default {
             },
             new_hash_example: {
               hash: newHash,
-              note: 'Toto je jak by vypadal hash vašeho hesla, kdybyste ho právě zaregistrovali (salt je náhodný, takže hash bude vždy jiný)'
+              note: 'Ukázkový hash z vašeho hesla (salt je náhodný)'
             },
             troubleshooting: {
               checks: [
-                `✓ Hash v DB začíná $argon2id? ${dbHash?.startsWith('$argon2id') ? 'ANO' : 'NE'}`,
-                `✓ Heslo má ${password.length} znaků`,
-                `✓ Heslo je: "${password}" (zkontrolujte přesně)`,
-              ],
-              common_issues: [
-                'Hash v DB musí začínat $argon2id',
-                'Heslo je case-sensitive (A ≠ a)',
-                'Zkontrolujte extra mezery na začátku/konci',
-                'Zkontrolujte speciální znaky (. ! @ # atd.)'
+                `Hash v DB začíná $argon2id? ${dbHash?.startsWith('$argon2id') ? '✓ ANO' : '✗ NE'}`,
+                `Heslo má ${password.length} znaků`,
+                `Přesný text: "${password}"`
               ],
               next_steps: verificationResult === true 
-                ? '✅ Heslo je SPRÁVNÉ! Login by měl fungovat.'
+                ? '✅ Heslo je SPRÁVNÉ! Login funguje.'
                 : verificationResult === false && dbHash
-                  ? '❌ Heslo NESEDÍ! Zkontrolujte přesný text hesla.'
-                  : '⚠️ Uživatel nenalezen nebo email nebyl zadán.'
+                  ? '❌ Heslo NESEDÍ! Zkontrolujte text.'
+                  : '⚠️ Zadejte email pro ověření.'
             }
           }, null, 2), { headers });
 
