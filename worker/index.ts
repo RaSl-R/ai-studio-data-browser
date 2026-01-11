@@ -1,5 +1,3 @@
-
-
 // worker/index.ts - Cloudflare Worker s testovací úvodní stránkou
 import { neon } from '@neondatabase/serverless';
 import { argon2Verify, createArgon2 } from 'hash-wasm';
@@ -93,13 +91,16 @@ export default {
         const { password, email } = await request.json() as any;
 
         try {
-          // 1. Vygenerovat nový hash z hesla
-          const newHash = await argon2Hash({
+          // 1. Vygenerovat nový hash z hesla pomocí argon2id
+          const argon2 = await createArgon2();
+          const salt = crypto.getRandomValues(new Uint8Array(16));
+          
+          const newHash = argon2.hash({
             password: password,
-            salt: crypto.getRandomValues(new Uint8Array(16)),
-            memorySize: 65536, // 64 MB
-            iterations: 3,
+            salt: salt,
             parallelism: 4,
+            iterations: 3,
+            memorySize: 65536, // 64 MB
             hashLength: 32,
             outputType: 'encoded'
           });
@@ -123,6 +124,8 @@ export default {
 
           // 3. Ověřit heslo proti DB hashi (pokud existuje)
           let verificationResult = null;
+          let verificationError = null;
+          
           if (dbHash) {
             try {
               verificationResult = await argon2Verify({
@@ -130,7 +133,8 @@ export default {
                 hash: dbHash,
               });
             } catch (e: any) {
-              verificationResult = { error: e.message };
+              verificationResult = false;
+              verificationError = e.message;
             }
           }
 
@@ -147,8 +151,8 @@ export default {
                 memory: params[0],   // m=65536
                 iterations: params[1], // t=3
                 parallelism: params[2], // p=4
-                salt: parts[4],
-                hash: parts[5]
+                salt_base64: parts[4],
+                hash_base64: parts[5]
               };
             }
           }
@@ -157,6 +161,7 @@ export default {
           return new Response(JSON.stringify({
             input: {
               password: password,
+              password_length: password.length,
               email: email || 'Not provided'
             },
             database: {
@@ -168,27 +173,36 @@ export default {
             verification: {
               password_matches: verificationResult === true,
               verification_result: verificationResult,
-              error: verificationResult?.error || null
+              error: verificationError
             },
             new_hash_example: {
               hash: newHash,
-              note: 'Toto je jak by vypadal hash vašeho hesla, kdybyste ho právě zaregistrovali'
+              note: 'Toto je jak by vypadal hash vašeho hesla, kdybyste ho právě zaregistrovali (salt je náhodný, takže hash bude vždy jiný)'
             },
             troubleshooting: {
+              checks: [
+                `✓ Hash v DB začíná $argon2id? ${dbHash?.startsWith('$argon2id') ? 'ANO' : 'NE'}`,
+                `✓ Heslo má ${password.length} znaků`,
+                `✓ Heslo je: "${password}" (zkontrolujte přesně)`,
+              ],
               common_issues: [
-                'Hash v DB začíná $argon2id? (správně)',
-                'Heslo obsahuje přesně to co jste zadali? (case-sensitive)',
-                'Není v hesle nějaký extra whitespace na začátku/konci?'
+                'Hash v DB musí začínat $argon2id',
+                'Heslo je case-sensitive (A ≠ a)',
+                'Zkontrolujte extra mezery na začátku/konci',
+                'Zkontrolujte speciální znaky (. ! @ # atd.)'
               ],
               next_steps: verificationResult === true 
-                ? '✅ Heslo je správné! Login by měl fungovat.'
-                : '❌ Heslo nesedí. Zkontrolujte přesný text hesla nebo resetujte v DB.'
+                ? '✅ Heslo je SPRÁVNÉ! Login by měl fungovat.'
+                : verificationResult === false && dbHash
+                  ? '❌ Heslo NESEDÍ! Zkontrolujte přesný text hesla.'
+                  : '⚠️ Uživatel nenalezen nebo email nebyl zadán.'
             }
           }, null, 2), { headers });
 
         } catch (error: any) {
           return new Response(JSON.stringify({
-            error: error.message,
+            error: 'Debug endpoint error',
+            message: error.message,
             stack: error.stack
           }), { status: 500, headers });
         }
