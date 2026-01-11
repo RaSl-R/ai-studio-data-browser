@@ -2,7 +2,7 @@
 
 // worker/index.ts - Cloudflare Worker s testovací úvodní stránkou
 import { neon } from '@neondatabase/serverless';
-import { argon2Verify, argon2Hash } from 'hash-wasm';
+import { argon2Verify, createArgon2 } from 'hash-wasm';
 
 export interface Env {
   DATABASE_URL: string;
