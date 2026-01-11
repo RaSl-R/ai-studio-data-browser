@@ -54,10 +54,24 @@ export default {
       // =====================================================
       if (url.pathname === '/' || url.pathname === '') {
         const time = await sql`SELECT NOW() as now`;
+        
+        // Ručně definovaný seznam endpointů pro DX (Developer Experience)
+        const endpoints = [
+          { method: 'GET', path: '/api/schemas', description: 'Seznam schémat' },
+          { method: 'GET', path: '/api/users', description: 'Seznam uživatelů (limit 10)' },
+          { method: 'GET', path: '/api/groups', description: 'Seznam uživatelských skupin' },
+          { method: 'POST', path: '/api/auth/login', body: { email: 'string', password: 'string' } },
+          { method: 'POST', path: '/api/auth/register', body: { email: 'string', password: 'string', groupId: 'number' } },
+          { method: 'GET', path: '/api/schemas/:schema/tables/:table/info', description: 'Metadata tabulky' },
+          { method: 'POST', path: '/api/schemas/:schema/tables/:table/data', description: 'Data tabulky (stránkování)' },
+          { method: 'POST', path: '/api/debug/hash', description: 'Test bcrypt hashování' }
+        ];
+
         return new Response(
           JSON.stringify({
             status: '✅ ONLINE',
             server_time: time[0].now,
+            endpoints: endpoints // <--- Přidáno zde
           }, null, 2),
           { headers }
         );
@@ -105,10 +119,10 @@ export default {
       if (infoMatch) {
         const [, schema, table] = infoMatch;
 
-        const count = await sql.unsafe(`
+        const countResult = await sql.unsafe(`
           SELECT COUNT(*)::int AS count
           FROM "${schema}"."${table}"
-        `);
+        `) as unknown as any[]; // <--- Dvojitý cast: UnsafeRawSql -> unknown -> any[]
 
         const columns = await sql`
           SELECT COUNT(*)::int AS count
@@ -121,7 +135,7 @@ export default {
           JSON.stringify({
             schema,
             table,
-            rows: count[0].count,
+            rows: countResult[0].count, // Nyní bezpečné, protože countResult je any[]
             columns: columns[0].count,
           }),
           { headers }
@@ -141,14 +155,14 @@ export default {
         const { page = 1, pageSize = 50 } = await request.json();
 
         const offset = (page - 1) * pageSize;
-
+        
         const data = (await sql.unsafe(`
           SELECT *
           FROM "${schema}"."${table}"
           ORDER BY 1
           LIMIT ${pageSize}
           OFFSET ${offset}
-        `)) as any[];
+        `)) as unknown as any[];
 
         return new Response(
           JSON.stringify({
@@ -231,18 +245,17 @@ export default {
       }
 
       // =====================================================
-      // GROUPS - MISSING ENDPOINT
+      // GROUPS
       // GET /api/groups
       // =====================================================
       if (url.pathname === '/api/groups') {
-        // Předpokládám, že existuje tabulka auth.groups
-        // Pokud se tabulka jmenuje jinak, upravte SQL dotaz
         const groups = await sql`
           SELECT id, name
           FROM auth.groups
           ORDER BY id
         `;
-        return new Response(JSON.stringify(groups), { headers });
+        // Změna: Zabalení do objektu { groups: ... }
+        return new Response(JSON.stringify({ groups }), { headers });
       }
 
       // =====================================================
