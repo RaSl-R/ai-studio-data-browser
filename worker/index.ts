@@ -183,7 +183,7 @@ export default {
         const { email, password } = await request.json() as any;
 
         const users = await sql`
-          SELECT id, email, password_hash
+          SELECT id, email, password_hashed
           FROM auth.users
           WHERE email = ${email}
             AND is_active = true
@@ -199,7 +199,7 @@ export default {
 
         const user = users[0];
 
-        const ok = bcrypt.compareSync(password, user.password_hash);
+        const ok = bcrypt.compareSync(password, user.password_hashed);
         if (!ok) {
           return new Response(
             JSON.stringify({ error: 'Nesprávné heslo' }),
@@ -233,7 +233,7 @@ export default {
         const hash = bcrypt.hashSync(password, 10);
 
         const user = await sql`
-          INSERT INTO auth.users (email, password_hash, is_active)
+          INSERT INTO auth.users (email, password_hashed, is_active)
           VALUES (${email}, ${hash}, true)
           RETURNING id
         `;
