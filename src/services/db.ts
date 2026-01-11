@@ -30,19 +30,19 @@ class DatabaseService {
   // AUTHENTICATION
   // ============================================
   
-  async login(email: string, password: string): Promise<User | null> {
+ async login(email: string, password: string): Promise<User | null> {
     try {
-      const result = await this.fetchAPI('/api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email, password })
-      });
-      
-      return result.user || null;
+        const result = await this.fetchAPI('/api/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({ email, password })
+        });
+
+        return result || null;
     } catch (error) {
-      console.error('Login error:', error);
-      return null;
+        console.error('Login error:', error);
+        return null;
     }
-  }
+}
 
   async register(email: string, password: string, groupId?: number): Promise<boolean> {
     try {
