@@ -1,6 +1,5 @@
 import { neon } from '@neondatabase/serverless';
-// Změna: importujeme createArgon2 místo neexistujícího argon2id
-import { argon2Verify, createArgon2 } from 'hash-wasm';
+import * as hashWasm from 'hash-wasm'; // Importujeme vše jako objekt
 
 export interface Env {
   DATABASE_URL: string;
@@ -15,120 +14,62 @@ export default {
       'Content-Type': 'application/json',
     };
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers });
-    }
-
+    if (request.method === 'OPTIONS') return new Response(null, { headers });
     const url = new URL(request.url);
 
     try {
       const sql = neon(env.DATABASE_URL);
 
-      // === API ENDPOINTS ===
-
-      // POST /api/debug/password - Debug endpoint pro testování hesel
       if (url.pathname === '/api/debug/password' && request.method === 'POST') {
         const { password, email } = await request.json() as any;
 
-        try {
-          // 1. OPRAVENÉ GENEROVÁNÍ HASHE (hash-wasm way)
-          const argon2 = await createArgon2();
-          argon2.init();
-          argon2.setMemorySize(65536); // 64 MB
-          argon2.setIterations(3);
-          argon2.setParallelism(4);
-          argon2.setHashLength(32);
-          argon2.setTag(1); // 1 = Argon2id
-          // Použijeme fixní salt pro ukázku, nebo náhodný pro bezpečnost
-          const salt = crypto.getRandomValues(new Uint8Array(16));
-          argon2.setSalt(salt);
-          argon2.setPassword(new TextEncoder().encode(password));
-          
-          const newHash = await argon2.calculate(); // Vrátí $argon2id$v=19$m=65536,t=3,p=4...
+        // --- GENEROVÁNÍ HASHE (Opravená verze) ---
+        // Využijeme argon2id přímo z objektu hashWasm
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        
+        // Použijeme metodu argon2id, která je nejběžnějším exportem
+        const newHash = await hashWasm.argon2id({
+          password: password,
+          salt: salt,
+          parallelism: 4,
+          iterations: 3,
+          memorySize: 65536, // 64 MB
+          hashLength: 32,
+          outputType: 'encoded', // Toto vrátí formát $argon2id$v=...
+        });
 
-          // 2. Načíst uživatele z databáze
-          let dbHash = null;
-          let dbUser = null;
-          if (email) {
-            const users = await sql`
-              SELECT id, email, password_hash 
-              FROM auth.users 
-              WHERE email = ${email}
-              LIMIT 1
-            `;
-            
-            if (users.length > 0) {
-              dbUser = users[0];
-              dbHash = users[0].password_hash;
-            }
-          }
-
-          // 3. Ověřit heslo proti DB hashi
-          let verificationResult = null;
-          let verificationError = null;
-          
-          if (dbHash) {
-            try {
-              verificationResult = await argon2Verify({
-                password: password,
-                hash: dbHash,
-              });
-            } catch (e: any) {
-              verificationResult = false;
-              verificationError = e.message;
-            }
-          }
-
-          // 4. Rozebrat DB hash na parametry
-          let hashParams = null;
-          if (dbHash && dbHash.includes('$')) {
-            const parts = dbHash.split('$');
-            if (parts.length >= 5) {
-              hashParams = {
-                algorithm: parts[1],
-                version: parts[2],
-                params: parts[3],
-                salt: parts[4],
-                hash: parts[5]
-              };
-            }
-          }
-
-          // 5. Vrátit detailní debug info
-          return new Response(JSON.stringify({
-            input: {
-              password: password,
-              password_length: password.length,
-              email: email || 'Zadán pouze pro ukázku hashe'
-            },
-            database: {
-              user_found: !!dbUser,
-              user_email: dbUser?.email,
-              stored_hash: dbHash,
-              hash_params: hashParams
-            },
-            verification: {
-              password_matches: verificationResult === true,
-              verification_result: verificationResult,
-              error: verificationError
-            },
-            new_hash_example: {
-              hash: newHash,
-              explanation: "Toto je hash, který by vznikl z vašeho hesla právě teď."
-            },
-            troubleshooting: {
-              next_steps: verificationResult === true 
-                ? '✅ Heslo je SPRÁVNÉ!' 
-                : (dbHash ? '❌ Heslo NESEDÍ s DB!' : 'ℹ️ Hash vygenerován pro ukázku.')
-            }
-          }, null, 2), { headers });
-
-        } catch (error: any) {
-          return new Response(JSON.stringify({
-            error: 'Argon2 Implementation Error',
-            message: error.message
-          }), { status: 500, headers });
+        // --- DATABÁZE ---
+        let dbUser = null;
+        if (email) {
+          const result = await sql`SELECT email, password_hash FROM auth.users WHERE email = ${email} LIMIT 1`;
+          if (result.length > 0) dbUser = result[0];
         }
+
+        // --- VERIFIKACE ---
+        let matches = false;
+        if (dbUser?.password_hash) {
+          matches = await hashWasm.argon2Verify({
+            password: password,
+            hash: dbUser.password_hash,
+          });
+        }
+
+        return new Response(JSON.stringify({
+          status: "success",
+          your_input: {
+            password: password,
+            email: email
+          },
+          generated_hash_now: newHash, // TADY UVIDÍTE SVŮJ HASH
+          database_check: {
+            user_found: !!dbUser,
+            stored_hash_in_db: dbUser?.password_hash || "Nenalezeno",
+            does_it_match: matches
+          },
+          helper: {
+            instruction: "Pokud se 'generated_hash_now' liší strukturou od 'stored_hash_in_db', je problém v nastavení Argon2."
+          }
+        }, null, 2), { headers });
       }
 
       // HTML UI pro testování hesel - přidejte také tento endpoint
