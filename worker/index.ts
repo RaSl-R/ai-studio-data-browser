@@ -1,3 +1,5 @@
+
+
 // worker/index.ts - Cloudflare Worker s testovací úvodní stránkou
 import { neon } from '@neondatabase/serverless';
 import { argon2Verify } from 'hash-wasm';
@@ -84,6 +86,312 @@ export default {
       }
 
       // === API ENDPOINTS ===
+      // Přidejte tento endpoint do worker/index.ts (před ostatní endpointy)
+
+      // POST /api/debug/password - Debug endpoint pro testování hesel
+      if (url.pathname === '/api/debug/password' && request.method === 'POST') {
+        const { password, email } = await request.json() as any;
+
+        try {
+          // 1. Vygenerovat nový hash z hesla
+          const newHash = await argon2Hash({
+            password: password,
+            salt: crypto.getRandomValues(new Uint8Array(16)),
+            memorySize: 65536, // 64 MB
+            iterations: 3,
+            parallelism: 4,
+            hashLength: 32,
+            outputType: 'encoded'
+          });
+
+          // 2. Načíst uživatele z databáze (pokud je zadán email)
+          let dbHash = null;
+          let dbUser = null;
+          if (email) {
+            const users = await sql`
+              SELECT id, email, password_hash 
+              FROM auth.users 
+              WHERE email = ${email}
+              LIMIT 1
+            `;
+            
+            if (users.length > 0) {
+              dbUser = users[0];
+              dbHash = users[0].password_hash;
+            }
+          }
+
+          // 3. Ověřit heslo proti DB hashi (pokud existuje)
+          let verificationResult = null;
+          if (dbHash) {
+            try {
+              verificationResult = await argon2Verify({
+                password: password,
+                hash: dbHash,
+              });
+            } catch (e: any) {
+              verificationResult = { error: e.message };
+            }
+          }
+
+          // 4. Rozebrat DB hash na parametry
+          let hashParams = null;
+          if (dbHash) {
+            const parts = dbHash.split('$');
+            // Format: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
+            if (parts.length >= 5) {
+              const params = parts[3].split(',');
+              hashParams = {
+                algorithm: parts[1], // argon2id
+                version: parts[2],   // v=19
+                memory: params[0],   // m=65536
+                iterations: params[1], // t=3
+                parallelism: params[2], // p=4
+                salt: parts[4],
+                hash: parts[5]
+              };
+            }
+          }
+
+          // 5. Vrátit debug info
+          return new Response(JSON.stringify({
+            input: {
+              password: password,
+              email: email || 'Not provided'
+            },
+            database: {
+              user_found: !!dbUser,
+              user_email: dbUser?.email,
+              stored_hash: dbHash,
+              hash_params: hashParams
+            },
+            verification: {
+              password_matches: verificationResult === true,
+              verification_result: verificationResult,
+              error: verificationResult?.error || null
+            },
+            new_hash_example: {
+              hash: newHash,
+              note: 'Toto je jak by vypadal hash vašeho hesla, kdybyste ho právě zaregistrovali'
+            },
+            troubleshooting: {
+              common_issues: [
+                'Hash v DB začíná $argon2id? (správně)',
+                'Heslo obsahuje přesně to co jste zadali? (case-sensitive)',
+                'Není v hesle nějaký extra whitespace na začátku/konci?'
+              ],
+              next_steps: verificationResult === true 
+                ? '✅ Heslo je správné! Login by měl fungovat.'
+                : '❌ Heslo nesedí. Zkontrolujte přesný text hesla nebo resetujte v DB.'
+            }
+          }, null, 2), { headers });
+
+        } catch (error: any) {
+          return new Response(JSON.stringify({
+            error: error.message,
+            stack: error.stack
+          }), { status: 500, headers });
+        }
+      }
+
+      // HTML UI pro testování hesel - přidejte také tento endpoint
+      if (url.pathname === '/debug-password-ui' && request.method === 'GET') {
+        const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Password Hash Debugger</title>
+        <style>
+          body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+          }
+          .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          }
+          h1 {
+            color: #333;
+            border-bottom: 3px solid #4CAF50;
+            padding-bottom: 10px;
+          }
+          .form-group {
+            margin: 20px 0;
+          }
+          label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #555;
+          }
+          input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+          }
+          button {
+            background: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+          }
+          button:hover {
+            background: #45a049;
+          }
+          #result {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 4px;
+            border-left: 4px solid #2196F3;
+            display: none;
+          }
+          #result.success {
+            border-left-color: #4CAF50;
+            background: #e8f5e9;
+          }
+          #result.error {
+            border-left-color: #f44336;
+            background: #ffebee;
+          }
+          pre {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 13px;
+          }
+          .status {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 15px;
+          }
+          .success-icon { color: #4CAF50; }
+          .error-icon { color: #f44336; }
+          .info-box {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+            border-left: 4px solid #2196F3;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>🔐 Password Hash Debugger</h1>
+          
+          <div class="info-box">
+            <strong>Použití:</strong> Zadejte heslo a email pro kontrolu, zda heslo odpovídá hashi v databázi.
+          </div>
+
+          <form id="testForm">
+            <div class="form-group">
+              <label>Heslo k testování:</label>
+              <input type="text" id="password" placeholder="Zadejte heslo (např. Testest1.)" required>
+              <small style="color: #666;">Tip: Zkuste váš test heslo "Testest1."</small>
+            </div>
+
+            <div class="form-group">
+              <label>Email uživatele (volitelné):</label>
+              <input type="email" id="email" placeholder="user@example.com">
+              <small style="color: #666;">Pokud zadáte email, ověří se heslo proti DB</small>
+            </div>
+
+            <button type="submit">🔍 Test Password Hash</button>
+          </form>
+
+          <div id="result"></div>
+        </div>
+
+        <script>
+          document.getElementById('testForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const password = document.getElementById('password').value;
+            const email = document.getElementById('email').value;
+            const resultDiv = document.getElementById('result');
+            
+            resultDiv.style.display = 'block';
+            resultDiv.className = '';
+            resultDiv.innerHTML = '<p>⏳ Testování...</p>';
+
+            try {
+              const response = await fetch('/api/debug/password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password, email })
+              });
+
+              const data = await response.json();
+              
+              if (data.verification.password_matches === true) {
+                resultDiv.className = 'success';
+                resultDiv.innerHTML = \`
+                  <div class="status success-icon">✅ HESLO JE SPRÁVNÉ!</div>
+                  <p><strong>Zadané heslo:</strong> \${password}</p>
+                  <p><strong>Email:</strong> \${data.database.user_email}</p>
+                  <p><strong>Verifikace:</strong> Hash v databázi odpovídá vašemu heslu</p>
+                  <h3>Detaily:</h3>
+                  <pre>\${JSON.stringify(data, null, 2)}</pre>
+                \`;
+              } else if (data.verification.password_matches === false) {
+                resultDiv.className = 'error';
+                resultDiv.innerHTML = \`
+                  <div class="status error-icon">❌ HESLO NESEDÍ!</div>
+                  <p><strong>Zadané heslo:</strong> \${password}</p>
+                  <p><strong>Email:</strong> \${data.database.user_email || 'nenalezen'}</p>
+                  <p><strong>Problém:</strong> Hash v databázi NEODPOVÍDÁ vašemu heslu</p>
+                  <div class="info-box">
+                    <strong>Možné příčiny:</strong>
+                    <ul>
+                      <li>Překlep v hesle (case-sensitive!)</li>
+                      <li>Extra mezery na začátku/konci</li>
+                      <li>Hash v DB je od jiného hesla</li>
+                    </ul>
+                  </div>
+                  <h3>Detaily:</h3>
+                  <pre>\${JSON.stringify(data, null, 2)}</pre>
+                \`;
+              } else {
+                resultDiv.innerHTML = \`
+                  <div class="status">ℹ️ INFO</div>
+                  <p>Email nebyl zadán nebo uživatel nenalezen. Zde je jak by vypadal hash:</p>
+                  <h3>Detaily:</h3>
+                  <pre>\${JSON.stringify(data, null, 2)}</pre>
+                \`;
+              }
+            } catch (error) {
+              resultDiv.className = 'error';
+              resultDiv.innerHTML = \`
+                <div class="status error-icon">❌ CHYBA</div>
+                <p><strong>Error:</strong> \${error.message}</p>
+              \`;
+            }
+          });
+        </script>
+      </body>
+      </html>
+        `;
+        
+        return new Response(html, {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
 
       // GET /api/schemas - Seznam schémat
       if (url.pathname === '/api/schemas') {
