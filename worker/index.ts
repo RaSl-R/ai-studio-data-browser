@@ -105,10 +105,10 @@ export default {
       if (infoMatch) {
         const [, schema, table] = infoMatch;
 
-        const count = await sql`
+        const count = await sql.unsafe(`
           SELECT COUNT(*)::int AS count
-          FROM ${sql.raw(`"${schema}"."${table}"`)}
-        `;
+          FROM "${schema}"."${table}"
+        `);
 
         const columns = await sql`
           SELECT COUNT(*)::int AS count
@@ -142,13 +142,13 @@ export default {
 
         const offset = (page - 1) * pageSize;
 
-        const data = await sql.unsafe<any[]>(`
+        const data = (await sql.unsafe(`
           SELECT *
           FROM "${schema}"."${table}"
           ORDER BY 1
           LIMIT ${pageSize}
           OFFSET ${offset}
-        `);
+        `)) as any[];
 
         return new Response(
           JSON.stringify({

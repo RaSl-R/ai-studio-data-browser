@@ -44,11 +44,11 @@ class DatabaseService {
     }
   }
 
-  async register(email: string, groupId?: number): Promise<boolean> {
+  async register(email: string, password: string, groupId?: number): Promise<boolean> {
     try {
       const result = await this.fetchAPI('/api/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ email, groupId })
+        body: JSON.stringify({ email, password, groupId }) // <-- Přidáno password
       });
       
       return result.success;
