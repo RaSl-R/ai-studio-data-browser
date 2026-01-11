@@ -338,18 +338,8 @@ export default {
               });
 
               const data = await response.json();
-              // Přidejte kontrolu existence dat
-              if (data.error) {
-                resultDiv.className = 'error';
-                resultDiv.innerHTML = `
-                  <div class="status error-icon">❌ SERVER ERROR</div>
-                  <p><strong>Chyba:</strong> ${data.error}</p>
-                  <pre>${data.stack || ''}</pre>
-                `;
-                return;
-              }
 
-              if (data.verification && data.verification.password_matches === true) {
+              if (data.verification.password_matches === true) {
                 resultDiv.className = 'success';
                 resultDiv.innerHTML = \`
                   <div class="status success-icon">✅ HESLO JE SPRÁVNÉ!</div>
