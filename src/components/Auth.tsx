@@ -142,7 +142,7 @@ const RegisterForm: React.FC<{ onViewChange: (v: any) => void }> = ({ onViewChan
 
         if (password !== confirm) return setError("Passwords do not match.");
 
-        const registered = await db.register(email, groupId);
+        const registered = await db.register(email, password, groupId);
         if (registered) {
             setSuccess(true);
             setTimeout(() => onViewChange('login'), 2000);

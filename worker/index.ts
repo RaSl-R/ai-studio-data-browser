@@ -231,6 +231,21 @@ export default {
       }
 
       // =====================================================
+      // GROUPS - MISSING ENDPOINT
+      // GET /api/groups
+      // =====================================================
+      if (url.pathname === '/api/groups') {
+        // Předpokládám, že existuje tabulka auth.groups
+        // Pokud se tabulka jmenuje jinak, upravte SQL dotaz
+        const groups = await sql`
+          SELECT id, name
+          FROM auth.groups
+          ORDER BY id
+        `;
+        return new Response(JSON.stringify(groups), { headers });
+      }
+
+      // =====================================================
       // 404
       // =====================================================
       return new Response(
