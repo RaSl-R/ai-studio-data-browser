@@ -1,6 +1,6 @@
-// worker/index.ts - Cloudflare Worker s testovací úvodní stránkou
 import { neon } from '@neondatabase/serverless';
-import { argon2Verify, argon2id } from 'hash-wasm';
+// Změna: importujeme createArgon2 místo neexistujícího argon2id
+import { argon2Verify, createArgon2 } from 'hash-wasm';
 
 export interface Env {
   DATABASE_URL: string;
@@ -24,85 +24,27 @@ export default {
     try {
       const sql = neon(env.DATABASE_URL);
 
-      // === ÚVODNÍ STRÁNKA === 
-      // GET / - Zobrazí status a test připojení
-      if (url.pathname === '/' || url.pathname === '') {
-        try {
-          // Test připojení - SELECT NOW()
-          const timeResult = await sql`SELECT NOW() as current_time`;
-          const currentTime = timeResult[0].current_time;
-
-          // Počet schémat
-          const schemasResult = await sql`
-            SELECT COUNT(*) as count
-            FROM information_schema.schemata 
-            WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          `;
-          const schemaCount = schemasResult[0].count;
-
-          // Počet uživatelů
-          const usersResult = await sql`SELECT COUNT(*) as count FROM auth.users`;
-          const userCount = usersResult[0].count;
-
-          return new Response(JSON.stringify({
-            status: '✅ ONLINE',
-            message: 'Data Browser Worker je připojen k databázi!',
-            database: {
-              connected: true,
-              server_time: currentTime,
-              schemas_count: parseInt(schemaCount),
-              users_count: parseInt(userCount)
-            },
-            available_endpoints: {
-              '/': 'Tato úvodní stránka (status)',
-              '/api/schemas': 'Seznam všech schémat',
-              '/api/users': 'Prvních 10 uživatelů',
-              '/api/groups': 'Seznam skupin',
-              '/api/schemas/:schema/tables': 'Tabulky v schématu',
-              '/api/schemas/:schema/tables/:table/info': 'Info o tabulce',
-              '/api/schemas/:schema/tables/:table/data': 'Data z tabulky (POST)'
-            },
-            example_usage: 'curl https://your-worker.workers.dev/api/users'
-          }, null, 2), { 
-            headers: {
-              ...headers,
-              'Content-Type': 'application/json; charset=utf-8'
-            } 
-          });
-
-        } catch (dbError: any) {
-          return new Response(JSON.stringify({
-            status: '❌ ERROR',
-            message: 'Nelze se připojit k databázi',
-            error: dbError.message,
-            hint: 'Zkontrolujte DATABASE_URL secret ve Wrangler'
-          }, null, 2), { 
-            status: 500,
-            headers 
-          });
-        }
-      }
-
       // === API ENDPOINTS ===
-      // Přidejte tento endpoint do worker/index.ts (před ostatní endpointy)
 
       // POST /api/debug/password - Debug endpoint pro testování hesel
       if (url.pathname === '/api/debug/password' && request.method === 'POST') {
         const { password, email } = await request.json() as any;
 
         try {
-          // 1. Vygenerovat nový hash pomocí argon2id
+          // 1. OPRAVENÉ GENEROVÁNÍ HASHE (hash-wasm way)
+          const argon2 = await createArgon2();
+          argon2.init();
+          argon2.setMemorySize(65536); // 64 MB
+          argon2.setIterations(3);
+          argon2.setParallelism(4);
+          argon2.setHashLength(32);
+          argon2.setTag(1); // 1 = Argon2id
+          // Použijeme fixní salt pro ukázku, nebo náhodný pro bezpečnost
           const salt = crypto.getRandomValues(new Uint8Array(16));
+          argon2.setSalt(salt);
+          argon2.setPassword(new TextEncoder().encode(password));
           
-          const newHash = await argon2id({
-            password: password,
-            salt: salt,
-            parallelism: 4,
-            iterations: 3,
-            memorySize: 65536, // 64 MB
-            hashLength: 32,
-            outputType: 'encoded'
-          });
+          const newHash = await argon2.calculate(); // Vrátí $argon2id$v=19$m=65536,t=3,p=4...
 
           // 2. Načíst uživatele z databáze
           let dbHash = null;
@@ -139,28 +81,25 @@ export default {
 
           // 4. Rozebrat DB hash na parametry
           let hashParams = null;
-          if (dbHash) {
+          if (dbHash && dbHash.includes('$')) {
             const parts = dbHash.split('$');
             if (parts.length >= 5) {
-              const params = parts[3].split(',');
               hashParams = {
                 algorithm: parts[1],
                 version: parts[2],
-                memory: params[0],
-                iterations: params[1],
-                parallelism: params[2],
-                salt_base64: parts[4],
-                hash_base64: parts[5]
+                params: parts[3],
+                salt: parts[4],
+                hash: parts[5]
               };
             }
           }
 
-          // 5. Vrátit debug info
+          // 5. Vrátit detailní debug info
           return new Response(JSON.stringify({
             input: {
               password: password,
               password_length: password.length,
-              email: email || 'Not provided'
+              email: email || 'Zadán pouze pro ukázku hashe'
             },
             database: {
               user_found: !!dbUser,
@@ -175,27 +114,19 @@ export default {
             },
             new_hash_example: {
               hash: newHash,
-              note: 'Ukázkový hash z vašeho hesla (salt je náhodný)'
+              explanation: "Toto je hash, který by vznikl z vašeho hesla právě teď."
             },
             troubleshooting: {
-              checks: [
-                `Hash v DB začíná $argon2id? ${dbHash?.startsWith('$argon2id') ? '✓ ANO' : '✗ NE'}`,
-                `Heslo má ${password.length} znaků`,
-                `Přesný text: "${password}"`
-              ],
               next_steps: verificationResult === true 
-                ? '✅ Heslo je SPRÁVNÉ! Login funguje.'
-                : verificationResult === false && dbHash
-                  ? '❌ Heslo NESEDÍ! Zkontrolujte text.'
-                  : '⚠️ Zadejte email pro ověření.'
+                ? '✅ Heslo je SPRÁVNÉ!' 
+                : (dbHash ? '❌ Heslo NESEDÍ s DB!' : 'ℹ️ Hash vygenerován pro ukázku.')
             }
           }, null, 2), { headers });
 
         } catch (error: any) {
           return new Response(JSON.stringify({
-            error: 'Debug endpoint error',
-            message: error.message,
-            stack: error.stack
+            error: 'Argon2 Implementation Error',
+            message: error.message
           }), { status: 500, headers });
         }
       }
