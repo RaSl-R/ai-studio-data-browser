@@ -1,4 +1,5 @@
-// worker/index.ts - Cloudflare Worker s testovací úvodní stránkou
+// worker/index.ts – Cloudflare Worker (bcrypt auth + Data Browser)
+
 import { neon } from '@neondatabase/serverless';
 import bcrypt from 'bcryptjs';
 
@@ -12,7 +13,7 @@ export default {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/json; charset=utf-8',
     };
 
     if (request.method === 'OPTIONS') {
@@ -24,82 +25,65 @@ export default {
     try {
       const sql = neon(env.DATABASE_URL);
 
-      // === ÚVODNÍ STRÁNKA === 
-      // GET / - Zobrazí status a test připojení
-      if (url.pathname === '/' || url.pathname === '') {
-        try {
-          // Test připojení - SELECT NOW()
-          const timeResult = await sql`SELECT NOW() as current_time`;
-          const currentTime = timeResult[0].current_time;
+      // =====================================================
+      // DEBUG – BCRYPT HASH
+      // POST /api/debug/hash
+      // =====================================================
+      if (url.pathname === '/api/debug/hash' && request.method === 'POST') {
+        const { password } = (await request.json()) as any;
 
-          // Počet schémat
-          const schemasResult = await sql`
-            SELECT COUNT(*) as count
-            FROM information_schema.schemata 
-            WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          `;
-          const schemaCount = schemasResult[0].count;
-
-          // Počet uživatelů
-          const usersResult = await sql`SELECT COUNT(*) as count FROM auth.users`;
-          const userCount = usersResult[0].count;
-
-          return new Response(JSON.stringify({
-            status: '✅ ONLINE',
-            message: 'Data Browser Worker je připojen k databázi!',
-            database: {
-              connected: true,
-              server_time: currentTime,
-              schemas_count: parseInt(schemaCount),
-              users_count: parseInt(userCount)
-            },
-            available_endpoints: {
-              '/': 'Tato úvodní stránka (status)',
-              '/api/schemas': 'Seznam všech schémat',
-              '/api/users': 'Prvních 10 uživatelů',
-              '/api/groups': 'Seznam skupin',
-              '/api/schemas/:schema/tables': 'Tabulky v schématu',
-              '/api/schemas/:schema/tables/:table/info': 'Info o tabulce',
-              '/api/schemas/:schema/tables/:table/data': 'Data z tabulky (POST)'
-            },
-            example_usage: 'curl https://your-worker.workers.dev/api/users'
-          }, null, 2), { 
-            headers: {
-              ...headers,
-              'Content-Type': 'application/json; charset=utf-8'
-            } 
-          });
-
-        } catch (dbError: any) {
-          return new Response(JSON.stringify({
-            status: '❌ ERROR',
-            message: 'Nelze se připojit k databázi',
-            error: dbError.message,
-            hint: 'Zkontrolujte DATABASE_URL secret ve Wrangler'
-          }, null, 2), { 
-            status: 500,
-            headers 
-          });
+        if (!password) {
+          return new Response(
+            JSON.stringify({ error: 'Missing password' }),
+            { status: 400, headers }
+          );
         }
-      }
 
-      // === API ENDPOINTS ===
+        const saltRounds = 10;
+        const hash = bcrypt.hashSync(password, saltRounds);
 
-      // GET /api/schemas - Seznam schémat
-      if (url.pathname === '/api/schemas') {
-        const result = await sql`
-          SELECT schema_name 
-          FROM information_schema.schemata 
-          WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-          ORDER BY schema_name
-        `;
         return new Response(
-          JSON.stringify({ schemas: result.map(r => r.schema_name) }), 
+          JSON.stringify({ password, hash }, null, 2),
           { headers }
         );
       }
 
-      // GET /api/users - Prvních 10 uživatelů
+      // =====================================================
+      // ROOT – STATUS
+      // GET /
+      // =====================================================
+      if (url.pathname === '/' || url.pathname === '') {
+        const time = await sql`SELECT NOW() as now`;
+        return new Response(
+          JSON.stringify({
+            status: '✅ ONLINE',
+            server_time: time[0].now,
+          }, null, 2),
+          { headers }
+        );
+      }
+
+      // =====================================================
+      // SCHEMAS
+      // GET /api/schemas
+      // =====================================================
+      if (url.pathname === '/api/schemas') {
+        const schemas = await sql`
+          SELECT schema_name
+          FROM information_schema.schemata
+          WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+          ORDER BY schema_name
+        `;
+        return new Response(
+          JSON.stringify({ schemas: schemas.map(s => s.schema_name) }),
+          { headers }
+        );
+      }
+
+      // =====================================================
+      // USERS
+      // GET /api/users
+      // =====================================================
       if (url.pathname === '/api/users') {
         const users = await sql`
           SELECT id, email, is_active, created_at
@@ -110,134 +94,89 @@ export default {
         return new Response(JSON.stringify({ users }), { headers });
       }
 
-      // GET /api/groups - Seznam skupin
-      if (url.pathname === '/api/groups') {
-        const groups = await sql`
-          SELECT id, name, description
-          FROM auth.groups
-          ORDER BY name
-        `;
-        return new Response(JSON.stringify({ groups }), { headers });
-      }
+      // =====================================================
+      // TABLE INFO
+      // GET /api/schemas/:schema/tables/:table/info
+      // =====================================================
+      const infoMatch = url.pathname.match(
+        /^\/api\/schemas\/([^/]+)\/tables\/([^/]+)\/info$/
+      );
 
-      // GET /api/schemas/:schema/tables - Tabulky v schématu
-      const tablesMatch = url.pathname.match(/^\/api\/schemas\/([^\/]+)\/tables$/);
-      if (tablesMatch) {
-        const schemaName = tablesMatch[1];
-        const tables = await sql`
-          SELECT table_name
-          FROM information_schema.tables
-          WHERE table_schema = ${schemaName}
-          ORDER BY table_name
+      if (infoMatch) {
+        const [, schema, table] = infoMatch;
+
+        const count = await sql`
+          SELECT COUNT(*)::int AS count
+          FROM ${sql.raw(`"${schema}"."${table}"`)}
         `;
+
+        const columns = await sql`
+          SELECT COUNT(*)::int AS count
+          FROM information_schema.columns
+          WHERE table_schema = ${schema}
+            AND table_name = ${table}
+        `;
+
         return new Response(
-          JSON.stringify({ tables: tables.map(t => t.table_name) }), 
+          JSON.stringify({
+            schema,
+            table,
+            rows: count[0].count,
+            columns: columns[0].count,
+          }),
           { headers }
         );
       }
 
-      // GET /api/schemas/:schema/tables/:table/info - Info o tabulce
-      const infoMatch = url.pathname.match(/^\/api\/schemas\/([^\/]+)\/tables\/([^\/]+)\/info$/);
-      if (infoMatch) {
-        const [, schemaName, tableName] = infoMatch;
-        
-        // Počet řádků
-        const countResult = await sql`
-          SELECT COUNT(*) as count 
-          FROM ${sql(schemaName + '.' + tableName)}
-        `;
-        
-        // Počet sloupců
-        const columnsResult = await sql`
-          SELECT COUNT(*) as count
-          FROM information_schema.columns
-          WHERE table_schema = ${schemaName} AND table_name = ${tableName}
-        `;
+      // =====================================================
+      // TABLE DATA (PAGINATED)
+      // POST /api/schemas/:schema/tables/:table/data
+      // =====================================================
+      const dataMatch = url.pathname.match(
+        /^\/api\/schemas\/([^/]+)\/tables\/([^/]+)\/data$/
+      );
 
-        return new Response(JSON.stringify({
-          schema_name: schemaName,
-          table_name: tableName,
-          full_name: `${schemaName}.${tableName}`,
-          row_count: parseInt(countResult[0].count),
-          column_count: parseInt(columnsResult[0].count)
-        }), { headers });
-      }
-
-      // POST /api/schemas/:schema/tables/:table/data - Data z tabulky
-      const dataMatch = url.pathname.match(/^\/api\/schemas\/([^\/]+)\/tables\/([^\/]+)\/data$/);
       if (dataMatch && request.method === 'POST') {
-        const [, schemaName, tableName] = dataMatch;
-        const body = await request.json() as any;
-        const { page = 1, pageSize = 50, whereClause = '' } = body;
+        const [, schema, table] = dataMatch;
+        const { page = 1, pageSize = 50 } = await request.json();
 
         const offset = (page - 1) * pageSize;
 
-        // Základní SQL injection prevence
-        if (whereClause) {
-          const forbidden = ['DELETE', 'UPDATE', 'INSERT', 'DROP', 'ALTER', 'EXEC', 'CREATE'];
-          const upperWhere = whereClause.toUpperCase();
-          
-          if (forbidden.some(keyword => upperWhere.includes(keyword))) {
-            return new Response(
-              JSON.stringify({ error: 'Forbidden SQL keyword detected' }),
-              { status: 400, headers }
-            );
-          }
-          
-          if (whereClause.includes('--') || whereClause.includes('/*')) {
-            return new Response(
-              JSON.stringify({ error: 'SQL comment patterns not allowed' }),
-              { status: 400, headers }
-            );
-          }
-        }
+        const data = await sql.unsafe<any[]>(`
+          SELECT *
+          FROM "${schema}"."${table}"
+          ORDER BY 1
+          LIMIT ${pageSize}
+          OFFSET ${offset}
+        `);
 
-        // Sestavení dotazu
-        const tablePath = `${schemaName}.${tableName}`;
-        
-        // Celkový počet (s WHERE pokud je)
-        let countQuery = `SELECT COUNT(*) as total FROM "${schemaName}"."${tableName}"`;
-        if (whereClause) {
-          countQuery += ` WHERE ${whereClause}`;
-        }
-        const countResult = await sql.unsafe(countQuery);
-        const totalRows = parseInt(countResult[0].total);
-
-        // Data s paginací
-        let dataQuery = `SELECT * FROM "${schemaName}"."${tableName}"`;
-        if (whereClause) {
-          dataQuery += ` WHERE ${whereClause}`;
-        }
-        dataQuery += ` ORDER BY 1 LIMIT ${pageSize} OFFSET ${offset}`;
-        
-        const dataResult = await sql.unsafe(dataQuery);
-
-        const totalPages = Math.ceil(totalRows / pageSize);
-
-        return new Response(JSON.stringify({
-          data: dataResult,
-          row_count: dataResult.length,
-          total_rows: totalRows,
-          page: page,
-          page_size: pageSize,
-          total_pages: totalPages
-        }), { headers });
+        return new Response(
+          JSON.stringify({
+            page,
+            pageSize,
+            rows: data.length,
+            data,
+          }),
+          { headers }
+        );
       }
 
-      // POST /api/auth/login - Přihlášení
+      // =====================================================
+      // AUTH – LOGIN
+      // POST /api/auth/login
+      // =====================================================
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
         const { email, password } = await request.json() as any;
 
         const users = await sql`
-          SELECT u.id, u.email, u.password_hashed, g.name as group_name 
-          FROM auth.users u
-          LEFT JOIN auth.user_groups ug ON u.id = ug.user_id
-          LEFT JOIN auth.groups g ON ug.group_id = g.id
-          WHERE u.email = ${email} AND u.is_active = true
+          SELECT id, email, password_hash
+          FROM auth.users
+          WHERE email = ${email}
+            AND is_active = true
           LIMIT 1
         `;
 
-        if (users.length === 0) {
+        if (!users.length) {
           return new Response(
             JSON.stringify({ error: 'Uživatel nenalezen' }),
             { status: 401, headers }
@@ -245,71 +184,72 @@ export default {
         }
 
         const user = users[0];
-        const storedHash = user.password_hashed;
 
-        const isValid = bcrypt.compareSync(password, storedHash);
-
-        if (!isValid) {
+        const ok = bcrypt.compareSync(password, user.password_hash);
+        if (!ok) {
           return new Response(
             JSON.stringify({ error: 'Nesprávné heslo' }),
             { status: 401, headers }
           );
         }
 
-        return new Response(JSON.stringify({
-          user: {
+        return new Response(
+          JSON.stringify({
             id: user.id,
             email: user.email,
-            group_name: user.group_name || 'Users',
-          }
-        }), { headers });
+          }),
+          { headers }
+        );
       }
 
-      // POST /api/auth/register - Registrace
+      // =====================================================
+      // AUTH – REGISTER
+      // POST /api/auth/register
+      // =====================================================
       if (url.pathname === '/api/auth/register' && request.method === 'POST') {
-        const { email, groupId } = await request.json() as any;
-        
-        try {
-          // Vložit uživatele
-          const newUser = await sql`
-            INSERT INTO auth.users (email, is_active)
-            VALUES (${email}, true)
-            RETURNING id
-          `;
-          
-          // Pokud je zadána skupina, přiřadit
-          if (groupId) {
-            await sql`
-              INSERT INTO auth.user_groups (user_id, group_id)
-              VALUES (${newUser[0].id}, ${groupId})
-            `;
-          }
-          
-          return new Response(JSON.stringify({ success: true }), { headers });
-        } catch (e: any) {
-          return new Response(JSON.stringify({ error: e.message }), { status: 400, headers });
+        const { email, password, groupId } = await request.json() as any;
+
+        if (!email || !password) {
+          return new Response(
+            JSON.stringify({ error: 'Email a heslo jsou povinné' }),
+            { status: 400, headers }
+          );
         }
+
+        const hash = bcrypt.hashSync(password, 10);
+
+        const user = await sql`
+          INSERT INTO auth.users (email, password_hash, is_active)
+          VALUES (${email}, ${hash}, true)
+          RETURNING id
+        `;
+
+        return new Response(
+          JSON.stringify({ success: true, user_id: user[0].id }),
+          { headers }
+        );
       }
 
-      // 404 - Neznámý endpoint
-      return new Response(JSON.stringify({
-        error: 'Not Found',
-        path: url.pathname,
-        hint: 'Navštivte / pro seznam dostupných endpointů'
-      }), { 
-        status: 404, 
-        headers 
-      });
+      // =====================================================
+      // 404
+      // =====================================================
+      return new Response(
+        JSON.stringify({
+          error: 'Not Found',
+          path: url.pathname,
+        }),
+        { status: 404, headers }
+      );
 
-    } catch (error: any) {
-      console.error('Worker Error:', error);
-      return new Response(JSON.stringify({
-        error: error.message,
-        stack: error.stack
-      }), { 
-        status: 500,
-        headers 
-      });
+    } catch (e: any) {
+      console.error('Worker error:', e);
+      return new Response(
+        JSON.stringify({
+          error: 'Internal Server Error',
+          details: e.message,
+        }),
+        { status: 500, headers }
+      );
     }
   },
 };
