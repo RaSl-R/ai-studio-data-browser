@@ -225,23 +225,11 @@ export default {
       }
 
       // POST /api/auth/login - Přihlášení
-      async function verifyPassword(password, hash) {
-        try {
-          return await argon2Verify({
-            password: password,
-            hash: hash,
-          });
-        } catch (e) {
-          console.error("WASM Argon2 Error:", e);
-          return false;
-        }
-      }
-
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
         const { email, password } = await request.json() as any;
 
         const users = await sql`
-          SELECT u.id, u.email, u.password_hashed, g.name as group_name 
+          SELECT u.id, u.email, u.password_hash, g.name as group_name 
           FROM auth.users u
           LEFT JOIN auth.user_groups ug ON u.id = ug.user_id
           LEFT JOIN auth.groups g ON ug.group_id = g.id
@@ -257,7 +245,7 @@ export default {
         }
 
         const user = users[0];
-        const storedHash = user.password_hashed;
+        const storedHash = user.password_hash;
 
         const isValid = bcrypt.compareSync(password, storedHash);
 
