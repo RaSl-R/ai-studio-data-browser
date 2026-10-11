@@ -2,17 +2,41 @@
 
 import { neon } from '@neondatabase/serverless';
 import bcrypt from 'bcryptjs';
+import {
+  isValidIdentifier,
+  escapeIdentifier,
+  validateWhereClause,
+  signJWT,
+  verifyJWT
+} from '../src/utils';
 
 export interface Env {
   DATABASE_URL: string;
+  JWT_SECRET?: string;
 }
+
+const DEFAULT_JWT_SECRET = 'data-browser-cloudflare-v2-jwt-secret-key-2026';
+
+async function authenticate(request: Request, secret: string): Promise<{ id: number; email: string; group_id?: number } | null> {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  const token = authHeader.substring(7).trim();
+  const payload = await verifyJWT(token, secret);
+  return payload as { id: number; email: string; group_id?: number } | null;
+}
+
+// =====================================================
+// MAIN WORKER HANDLER
+// =====================================================
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const headers = {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       'Content-Type': 'application/json; charset=utf-8',
     };
 
@@ -21,6 +45,7 @@ export default {
     }
 
     const url = new URL(request.url);
+    const jwtSecret = env.JWT_SECRET || DEFAULT_JWT_SECRET;
 
     try {
       const sql = neon(env.DATABASE_URL);
@@ -55,15 +80,16 @@ export default {
       if (url.pathname === '/' || url.pathname === '') {
         const time = await sql`SELECT NOW() as now`;
         
-        // Ručně definovaný seznam endpointů pro DX (Developer Experience)
         const endpoints = [
           { method: 'GET', path: '/api/schemas', description: 'Seznam schémat' },
+          { method: 'GET', path: '/api/schemas/:schema/tables', description: 'Seznam tabulek ve schématu' },
           { method: 'GET', path: '/api/users', description: 'Seznam uživatelů (limit 10)' },
           { method: 'GET', path: '/api/groups', description: 'Seznam uživatelských skupin' },
           { method: 'POST', path: '/api/auth/login', body: { email: 'string', password: 'string' } },
           { method: 'POST', path: '/api/auth/register', body: { email: 'string', password: 'string', groupId: 'number' } },
           { method: 'GET', path: '/api/schemas/:schema/tables/:table/info', description: 'Metadata tabulky' },
           { method: 'POST', path: '/api/schemas/:schema/tables/:table/data', description: 'Data tabulky (stránkování)' },
+          { method: 'PUT', path: '/api/schemas/:schema/tables/:table/data', description: 'Aktualizace / import dat tabulky' },
           { method: 'POST', path: '/api/debug/hash', description: 'Test bcrypt hashování' }
         ];
 
@@ -71,9 +97,136 @@ export default {
           JSON.stringify({
             status: '✅ ONLINE',
             server_time: time[0].now,
-            endpoints: endpoints // <--- Přidáno zde
+            endpoints
           }, null, 2),
           { headers }
+        );
+      }
+
+      // =====================================================
+      // AUTH – LOGIN
+      // POST /api/auth/login
+      // =====================================================
+      if (url.pathname === '/api/auth/login' && request.method === 'POST') {
+        const { email, password } = await request.json() as any;
+
+        if (!email || !password) {
+          return new Response(
+            JSON.stringify({ error: 'Email a heslo jsou povinné' }),
+            { status: 400, headers }
+          );
+        }
+
+        const users = await sql`
+          SELECT u.id, u.email, u.password_hashed, u.is_active, u.group_id, g.name as group_name
+          FROM auth.users u
+          LEFT JOIN auth.groups g ON u.group_id = g.id
+          WHERE u.email = ${email}
+            AND u.is_active = true
+          LIMIT 1
+        `;
+
+        if (!users.length) {
+          return new Response(
+            JSON.stringify({ error: 'Uživatel nenalezen' }),
+            { status: 401, headers }
+          );
+        }
+
+        const user = users[0];
+
+        const ok = bcrypt.compareSync(password, user.password_hashed);
+        if (!ok) {
+          return new Response(
+            JSON.stringify({ error: 'Nesprávné heslo' }),
+            { status: 401, headers }
+          );
+        }
+
+        const token = await signJWT(
+          { id: user.id, email: user.email, group_id: user.group_id },
+          jwtSecret
+        );
+
+        return new Response(
+          JSON.stringify({
+            id: user.id,
+            email: user.email,
+            is_active: user.is_active,
+            group_id: user.group_id,
+            group_name: user.group_name || 'Viewer',
+            token
+          }),
+          { headers }
+        );
+      }
+
+      // =====================================================
+      // AUTH – REGISTER
+      // POST /api/auth/register
+      // =====================================================
+      if (url.pathname === '/api/auth/register' && request.method === 'POST') {
+        const { email, password, groupId } = await request.json() as any;
+
+        if (!email || !password) {
+          return new Response(
+            JSON.stringify({ error: 'Email a heslo jsou povinné' }),
+            { status: 400, headers }
+          );
+        }
+
+        const existing = await sql`
+          SELECT id FROM auth.users WHERE email = ${email} LIMIT 1
+        `;
+
+        if (existing.length) {
+          return new Response(
+            JSON.stringify({ error: 'Uživatel s tímto emailem již existuje' }),
+            { status: 400, headers }
+          );
+        }
+
+        const hash = bcrypt.hashSync(password, 10);
+        const assignedGroupId = typeof groupId === 'number' ? groupId : 3;
+
+        const user = await sql`
+          INSERT INTO auth.users (email, password_hashed, is_active, group_id)
+          VALUES (${email}, ${hash}, true, ${assignedGroupId})
+          RETURNING id
+        `;
+
+        const token = await signJWT(
+          { id: user[0].id, email, group_id: assignedGroupId },
+          jwtSecret
+        );
+
+        return new Response(
+          JSON.stringify({ success: true, user_id: user[0].id, token }),
+          { headers }
+        );
+      }
+
+      // =====================================================
+      // GROUPS
+      // GET /api/groups
+      // =====================================================
+      if (url.pathname === '/api/groups') {
+        const groups = await sql`
+          SELECT id, name, description
+          FROM auth.groups
+          ORDER BY id
+        `;
+        return new Response(JSON.stringify({ groups }), { headers });
+      }
+
+      // =====================================================
+      // AUTHENTICATION CHECK FOR PROTECTED ROUTES
+      // =====================================================
+      const authenticatedUser = await authenticate(request, jwtSecret);
+      if (!authenticatedUser) {
+        return new Response(
+          JSON.stringify({ error: 'Neautorizovaný přístup. Chybí platný token.' }),
+          { status: 401, headers }
         );
       }
 
@@ -95,14 +248,47 @@ export default {
       }
 
       // =====================================================
+      // SCHEMAS / TABLES LIST
+      // GET /api/schemas/:schema/tables
+      // =====================================================
+      const tablesMatch = url.pathname.match(/^\/api\/schemas\/([^/]+)\/tables$/);
+      if (tablesMatch && request.method === 'GET') {
+        const [, schema] = tablesMatch;
+
+        if (!isValidIdentifier(schema)) {
+          return new Response(
+            JSON.stringify({ error: 'Neplatný název schématu' }),
+            { status: 400, headers }
+          );
+        }
+
+        const tables = await sql`
+          SELECT table_name
+          FROM information_schema.tables
+          WHERE table_schema = ${schema}
+            AND table_type = 'BASE TABLE'
+          ORDER BY table_name
+        `;
+
+        return new Response(
+          JSON.stringify({
+            schema,
+            tables: tables.map(t => t.table_name)
+          }),
+          { headers }
+        );
+      }
+
+      // =====================================================
       // USERS
       // GET /api/users
       // =====================================================
       if (url.pathname === '/api/users') {
         const users = await sql`
-          SELECT id, email, is_active, created_at
-          FROM auth.users
-          ORDER BY id
+          SELECT u.id, u.email, u.is_active, u.group_id, g.name as group_name, u.created_at
+          FROM auth.users u
+          LEFT JOIN auth.groups g ON u.group_id = g.id
+          ORDER BY u.id
           LIMIT 10
         `;
         return new Response(JSON.stringify({ users }), { headers });
@@ -119,10 +305,20 @@ export default {
       if (infoMatch) {
         const [, schema, table] = infoMatch;
 
-        const countResult = await sql.unsafe(`
+        if (!isValidIdentifier(schema) || !isValidIdentifier(table)) {
+          return new Response(
+            JSON.stringify({ error: 'Neplatné identifikátory schématu nebo tabulky' }),
+            { status: 400, headers }
+          );
+        }
+
+        const safeSchema = escapeIdentifier(schema);
+        const safeTable = escapeIdentifier(table);
+
+        const countResult = (await sql.unsafe(`
           SELECT COUNT(*)::int AS count
-          FROM "${schema}"."${table}"
-        `) as unknown as any[]; // <--- Dvojitý cast: UnsafeRawSql -> unknown -> any[]
+          FROM ${safeSchema}.${safeTable}
+        `)) as unknown as any[];
 
         const columns = await sql`
           SELECT COUNT(*)::int AS count
@@ -133,17 +329,20 @@ export default {
 
         return new Response(
           JSON.stringify({
-            schema,
-            table,
-            rows: countResult[0].count, // Nyní bezpečné, protože countResult je any[]
-            columns: columns[0].count,
+            schema_name: schema,
+            table_name: table,
+            full_name: `${schema}.${table}`,
+            row_count: countResult[0]?.count || 0,
+            column_count: columns[0]?.count || 0,
+            rows: countResult[0]?.count || 0,
+            columns: columns[0]?.count || 0,
           }),
           { headers }
         );
       }
 
       // =====================================================
-      // TABLE DATA (PAGINATED)
+      // TABLE DATA (PAGINATED & FILTERED)
       // POST /api/schemas/:schema/tables/:table/data
       // =====================================================
       const dataMatch = url.pathname.match(
@@ -152,110 +351,94 @@ export default {
 
       if (dataMatch && request.method === 'POST') {
         const [, schema, table] = dataMatch;
-        const { page = 1, pageSize = 50 } = await request.json();
 
-        const offset = (page - 1) * pageSize;
-        
-        const data = (await sql.unsafe(`
-          SELECT *
-          FROM "${schema}"."${table}"
-          ORDER BY 1
-          LIMIT ${pageSize}
-          OFFSET ${offset}
-        `)) as unknown as any[];
-
-        return new Response(
-          JSON.stringify({
-            page,
-            pageSize,
-            rows: data.length,
-            data,
-          }),
-          { headers }
-        );
-      }
-
-      // =====================================================
-      // AUTH – LOGIN
-      // POST /api/auth/login
-      // =====================================================
-      if (url.pathname === '/api/auth/login' && request.method === 'POST') {
-        const { email, password } = await request.json() as any;
-
-        const users = await sql`
-          SELECT id, email, password_hashed
-          FROM auth.users
-          WHERE email = ${email}
-            AND is_active = true
-          LIMIT 1
-        `;
-
-        if (!users.length) {
+        if (!isValidIdentifier(schema) || !isValidIdentifier(table)) {
           return new Response(
-            JSON.stringify({ error: 'Uživatel nenalezen' }),
-            { status: 401, headers }
-          );
-        }
-
-        const user = users[0];
-
-        const ok = bcrypt.compareSync(password, user.password_hashed);
-        if (!ok) {
-          return new Response(
-            JSON.stringify({ error: 'Nesprávné heslo' }),
-            { status: 401, headers }
-          );
-        }
-
-        return new Response(
-          JSON.stringify({
-            id: user.id,
-            email: user.email,
-          }),
-          { headers }
-        );
-      }
-
-      // =====================================================
-      // AUTH – REGISTER
-      // POST /api/auth/register
-      // =====================================================
-      if (url.pathname === '/api/auth/register' && request.method === 'POST') {
-        const { email, password, groupId } = await request.json() as any;
-
-        if (!email || !password) {
-          return new Response(
-            JSON.stringify({ error: 'Email a heslo jsou povinné' }),
+            JSON.stringify({ error: 'Neplatné identifikátory schématu nebo tabulky' }),
             { status: 400, headers }
           );
         }
 
-        const hash = bcrypt.hashSync(password, 10);
+        const body = (await request.json().catch(() => ({}))) as any;
+        const page = Math.max(1, parseInt(String(body.page || 1), 10) || 1);
+        const pageSize = Math.min(100, Math.max(1, parseInt(String(body.pageSize || 50), 10) || 50));
+        const whereClause = typeof body.whereClause === 'string' ? body.whereClause.trim() : '';
 
-        const user = await sql`
-          INSERT INTO auth.users (email, password_hashed, is_active)
-          VALUES (${email}, ${hash}, true)
-          RETURNING id
-        `;
+        if (whereClause) {
+          const validation = validateWhereClause(whereClause);
+          if (!validation.isValid) {
+            return new Response(
+              JSON.stringify({ error: validation.error }),
+              { status: 400, headers }
+            );
+          }
+        }
+
+        const safeSchema = escapeIdentifier(schema);
+        const safeTable = escapeIdentifier(table);
+        const offset = (page - 1) * pageSize;
+
+        // Base query
+        let countQuery = `SELECT COUNT(*)::int AS total FROM ${safeSchema}.${safeTable}`;
+        let dataQuery = `SELECT * FROM ${safeSchema}.${safeTable}`;
+
+        if (whereClause) {
+          countQuery += ` WHERE ${whereClause}`;
+          dataQuery += ` WHERE ${whereClause}`;
+        }
+
+        dataQuery += ` ORDER BY 1 LIMIT ${pageSize} OFFSET ${offset}`;
+
+        const totalResult = (await sql.unsafe(countQuery)) as unknown as any[];
+        const totalRows = totalResult[0]?.total || 0;
+        const totalPages = Math.ceil(totalRows / pageSize) || 1;
+
+        const data = (await sql.unsafe(dataQuery)) as unknown as any[];
 
         return new Response(
-          JSON.stringify({ success: true, user_id: user[0].id }),
+          JSON.stringify({
+            data,
+            row_count: data.length,
+            total_rows: totalRows,
+            page,
+            page_size: pageSize,
+            total_pages: totalPages,
+          }),
           { headers }
         );
       }
 
       // =====================================================
-      // GROUPS
-      // GET /api/groups
+      // UPDATE DATA / IMPORT CSV DATA
+      // PUT /api/schemas/:schema/tables/:table/data
       // =====================================================
-      if (url.pathname === '/api/groups') {
-        const groups = await sql`
-          SELECT id, name
-          FROM auth.groups
-          ORDER BY id
-        `;
-        // Změna: Zabalení do objektu { groups: ... }
-        return new Response(JSON.stringify({ groups }), { headers });
+      if (dataMatch && request.method === 'PUT') {
+        const [, schema, table] = dataMatch;
+
+        if (!isValidIdentifier(schema) || !isValidIdentifier(table)) {
+          return new Response(
+            JSON.stringify({ error: 'Neplatné identifikátory schématu nebo tabulky' }),
+            { status: 400, headers }
+          );
+        }
+
+        const body = (await request.json().catch(() => ({}))) as any;
+        const newData = body.data;
+
+        if (!Array.isArray(newData)) {
+          return new Response(
+            JSON.stringify({ error: 'Pole data musí být pole objektů' }),
+            { status: 400, headers }
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: `Úspěšně aktualizováno ${newData.length} řádků`,
+          }),
+          { headers }
+        );
       }
 
       // =====================================================

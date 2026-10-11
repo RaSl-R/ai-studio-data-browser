@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Auth from './components/Auth';
 import { Dashboard } from './components/Dashboard';
 import { User } from './types';
+import { db } from './services/db';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -11,6 +12,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    db.logout();
     setUser(null);
   };
 
