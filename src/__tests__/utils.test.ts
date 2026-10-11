@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { validateEmail, validatePassword, getPasswordStrength, validateWhereClause } from '../utils';
-import { isValidIdentifier, escapeIdentifier, signJWT, verifyJWT } from '../../worker/index';
+import {
+  validateEmail,
+  validatePassword,
+  getPasswordStrength,
+  validateWhereClause,
+  isValidIdentifier,
+  escapeIdentifier,
+  signJWT,
+  verifyJWT
+} from '../utils';
 
 describe('Frontend Utils', () => {
   it('validates emails correctly', () => {

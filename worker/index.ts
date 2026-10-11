@@ -2,6 +2,13 @@
 
 import { neon } from '@neondatabase/serverless';
 import bcrypt from 'bcryptjs';
+import {
+  isValidIdentifier,
+  escapeIdentifier,
+  validateWhereClause,
+  signJWT,
+  verifyJWT
+} from '../src/utils';
 
 export interface Env {
   DATABASE_URL: string;
@@ -9,124 +16,6 @@ export interface Env {
 }
 
 const DEFAULT_JWT_SECRET = 'data-browser-cloudflare-v2-jwt-secret-key-2026';
-
-// =====================================================
-// SECURITY & SANITIZATION UTILITIES
-// =====================================================
-
-export function isValidIdentifier(name: string): boolean {
-  return /^[a-zA-Z0-9_]+$/.test(name);
-}
-
-export function escapeIdentifier(name: string): string {
-  if (!isValidIdentifier(name)) {
-    throw new Error(`Invalid SQL identifier: ${name}`);
-  }
-  return `"${name}"`;
-}
-
-export function validateWhereClause(clause: string): { isValid: boolean; error?: string } {
-  if (!clause) return { isValid: true };
-  const FORBIDDEN_SQL_KEYWORDS = [
-    "DELETE", "UPDATE", "INSERT", "DROP",
-    "ALTER", "EXEC", "EXECUTE", "CREATE", "TRUNCATE"
-  ];
-  const SQL_COMMENT_PATTERNS = [";", "--", "/*"];
-
-  for (const pattern of SQL_COMMENT_PATTERNS) {
-    if (clause.includes(pattern)) {
-      return { isValid: false, error: `Comment pattern '${pattern}' not allowed` };
-    }
-  }
-
-  for (const keyword of FORBIDDEN_SQL_KEYWORDS) {
-    const regex = new RegExp(`\\b${keyword}\\b`, 'i');
-    if (regex.test(clause)) {
-      return { isValid: false, error: `Keyword '${keyword}' not allowed in filter` };
-    }
-  }
-
-  return { isValid: true };
-}
-
-// =====================================================
-// JWT UTILITIES (Web Crypto API)
-// =====================================================
-
-async function getCryptoKey(secret: string): Promise<CryptoKey> {
-  const enc = new TextEncoder();
-  return crypto.subtle.importKey(
-    'raw',
-    enc.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign', 'verify']
-  );
-}
-
-function base64UrlEncode(arr: Uint8Array): string {
-  let str = '';
-  for (let i = 0; i < arr.length; i++) {
-    str += String.fromCharCode(arr[i]);
-  }
-  return btoa(str)
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-}
-
-function base64UrlDecode(str: string): string {
-  str = str.replace(/-/g, '+').replace(/_/g, '/');
-  while (str.length % 4) {
-    str += '=';
-  }
-  return atob(str);
-}
-
-export async function signJWT(payload: Record<string, any>, secret: string, expiresInSec = 86400): Promise<string> {
-  const header = { alg: 'HS256', typ: 'JWT' };
-  const exp = Math.floor(Date.now() / 1000) + expiresInSec;
-  const fullPayload = { ...payload, exp };
-
-  const encHeader = base64UrlEncode(new TextEncoder().encode(JSON.stringify(header)));
-  const encPayload = base64UrlEncode(new TextEncoder().encode(JSON.stringify(fullPayload)));
-
-  const dataToSign = new TextEncoder().encode(`${encHeader}.${encPayload}`);
-  const key = await getCryptoKey(secret);
-  const sig = await crypto.subtle.sign('HMAC', key, dataToSign);
-  const encSig = base64UrlEncode(new Uint8Array(sig));
-
-  return `${encHeader}.${encPayload}.${encSig}`;
-}
-
-export async function verifyJWT(token: string, secret: string): Promise<Record<string, any> | null> {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-
-    const [encHeader, encPayload, encSig] = parts;
-    const dataToVerify = new TextEncoder().encode(`${encHeader}.${encPayload}`);
-    const key = await getCryptoKey(secret);
-
-    const sigStr = base64UrlDecode(encSig);
-    const sigArr = new Uint8Array(sigStr.length);
-    for (let i = 0; i < sigStr.length; i++) {
-      sigArr[i] = sigStr.charCodeAt(i);
-    }
-
-    const isValid = await crypto.subtle.verify('HMAC', key, sigArr, dataToVerify);
-    if (!isValid) return null;
-
-    const payload = JSON.parse(base64UrlDecode(encPayload));
-    if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) {
-      return null;
-    }
-
-    return payload;
-  } catch {
-    return null;
-  }
-}
 
 async function authenticate(request: Request, secret: string): Promise<{ id: number; email: string; group_id?: number } | null> {
   const authHeader = request.headers.get('Authorization');

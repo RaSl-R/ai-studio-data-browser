@@ -5,10 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:server": "tsx watch server/index.ts",
     "dev:worker": "wrangler dev",
     "build": "tsc && vite build",
-    "build:server": "tsc server/index.ts --outDir dist/server",
     "deploy:worker": "wrangler deploy",
     "preview": "vite preview",
     "test": "vitest run"
@@ -40,6 +38,6 @@
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
     "vite": "^7.3.1",
-    "vitest": "^5.0.3"
+    "vitest": "^1.6.1"
   }
 }
