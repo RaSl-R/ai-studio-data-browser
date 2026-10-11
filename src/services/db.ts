@@ -1,22 +1,46 @@
 // src/services/db.ts
 import { QueryResult, TableInfo, User, PAGE_SIZE, Group } from "../types";
 
-const API_URL = import.meta.env.VITE_API_URL;
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 
 class DatabaseService {
+  private token: string | null = typeof localStorage !== 'undefined' ? localStorage.getItem('auth_token') : null;
+
+  setToken(token: string | null) {
+    this.token = token;
+    if (typeof localStorage !== 'undefined') {
+      if (token) {
+        localStorage.setItem('auth_token', token);
+      } else {
+        localStorage.removeItem('auth_token');
+      }
+    }
+  }
+
+  getToken(): string | null {
+    return this.token;
+  }
+
   private async fetchAPI(endpoint: string, options?: RequestInit) {
     try {
-      const response = await fetch(`${API_URL}${endpoint}`, {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(options?.headers as Record<string, string>),
+      };
+
+      if (this.token) {
+        headers['Authorization'] = `Bearer ${this.token}`;
+      }
+
+      const url = endpoint.startsWith('/') ? `${API_BASE_URL}${endpoint}` : `${API_BASE_URL}/${endpoint}`;
+      const response = await fetch(url, {
         ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          ...options?.headers,
-        },
+        headers,
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'API request failed');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `API request failed with status ${response.status}`);
       }
 
       return response.json();
@@ -30,32 +54,44 @@ class DatabaseService {
   // AUTHENTICATION
   // ============================================
   
- async login(email: string, password: string): Promise<User | null> {
+  async login(email: string, password: string): Promise<User | null> {
     try {
-        const result = await this.fetchAPI('/api/auth/login', {
-            method: 'POST',
-            body: JSON.stringify({ email, password })
-        });
+      const result = await this.fetchAPI('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password })
+      });
 
-        return result || null;
+      if (result && result.token) {
+        this.setToken(result.token);
+      }
+
+      return result || null;
     } catch (error) {
-        console.error('Login error:', error);
-        return null;
+      console.error('Login error:', error);
+      return null;
     }
-}
+  }
 
   async register(email: string, password: string, groupId?: number): Promise<boolean> {
     try {
       const result = await this.fetchAPI('/api/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ email, password, groupId }) // <-- Přidáno password
+        body: JSON.stringify({ email, password, groupId })
       });
+
+      if (result && result.token) {
+        this.setToken(result.token);
+      }
       
-      return result.success;
+      return Boolean(result.success);
     } catch (error) {
       console.error('Register error:', error);
       return false;
     }
+  }
+
+  logout() {
+    this.setToken(null);
   }
 
   async getGroups(): Promise<Group[]> {
@@ -75,8 +111,6 @@ class DatabaseService {
   async getAccessibleSchemas(user: User): Promise<string[]> {
     try {
       const result = await this.fetchAPI('/api/schemas');
-      
-      // TODO: Filter based on user permissions
       return result.schemas || [];
     } catch (error) {
       console.error('Error fetching schemas:', error);
@@ -86,7 +120,7 @@ class DatabaseService {
 
   async getTables(schemaName: string): Promise<string[]> {
     try {
-      const result = await this.fetchAPI(`/api/schemas/${schemaName}/tables`);
+      const result = await this.fetchAPI(`/api/schemas/${encodeURIComponent(schemaName)}/tables`);
       return result.tables || [];
     } catch (error) {
       console.error('Error fetching tables:', error);
@@ -97,7 +131,7 @@ class DatabaseService {
   async getTableInfo(schemaName: string, tableName: string): Promise<TableInfo> {
     try {
       const result = await this.fetchAPI(
-        `/api/schemas/${schemaName}/tables/${tableName}/info`
+        `/api/schemas/${encodeURIComponent(schemaName)}/tables/${encodeURIComponent(tableName)}/info`
       );
       return result;
     } catch (error) {
@@ -114,7 +148,7 @@ class DatabaseService {
   ): Promise<QueryResult> {
     try {
       const result = await this.fetchAPI(
-        `/api/schemas/${schemaName}/tables/${tableName}/data`,
+        `/api/schemas/${encodeURIComponent(schemaName)}/tables/${encodeURIComponent(tableName)}/data`,
         {
           method: 'POST',
           body: JSON.stringify({
@@ -136,9 +170,7 @@ class DatabaseService {
   // ============================================
   
   hasWritePermission(user: User, schemaName: string): boolean {
-    // TODO: Check actual permissions from database
-    // For now, only admins have write access
-    return user.group_name === "Admins";
+    return user.group_name === "Admins" || user.group_name === "Admin";
   }
 
   async updateData(
@@ -148,13 +180,13 @@ class DatabaseService {
   ): Promise<boolean> {
     try {
       const result = await this.fetchAPI(
-        `/api/schemas/${schemaName}/tables/${tableName}/data`,
+        `/api/schemas/${encodeURIComponent(schemaName)}/tables/${encodeURIComponent(tableName)}/data`,
         {
           method: 'PUT',
           body: JSON.stringify({ data: newData })
         }
       );
-      return result.success;
+      return Boolean(result.success);
     } catch (error) {
       console.error('Update error:', error);
       return false;

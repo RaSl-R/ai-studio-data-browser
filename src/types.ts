@@ -10,12 +10,13 @@ export interface User {
     is_active: boolean;
     group_id?: number;
     group_name?: string;
+    token?: string;
 }
 
 export interface Group {
     id: number;
     name: string;
-    description: string;
+    description?: string;
 }
 
 export interface SchemaPermission {
@@ -45,7 +46,7 @@ export interface AuthResponse {
     success: boolean;
     user?: User;
     error?: string;
-    token?: string; // Mock token
+    token?: string;
 }
 
 export const PAGE_SIZE = 50;
